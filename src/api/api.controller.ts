@@ -12,11 +12,15 @@ import {
   UseInterceptors,
   UsePipes,
   ValidationPipe,
+  All,
+  Req,
 } from '@nestjs/common';
 import {
   SignupResponse,
   UserRegistration,
   UsersResponse,
+  ResponseCode,
+  ResponseStatus
 } from './api.interface';
 import { ApiService } from './api.service';
 import { ConfigResolverService } from './config.resolver.service';
@@ -27,10 +31,14 @@ import { RefreshRequest } from '@fusionauth/typescript-client/build/src/FusionAu
 import { ChangePasswordDTO } from './dto/changePassword.dto';
 import { SentryInterceptor } from '../interceptors/sentry.interceptor';
 import * as Sentry from '@sentry/node';
-import { LoginDto } from './dto/login.dto';
+import { LoginDto, LoginWithUniqueIdDto } from './dto/login.dto';
 import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { Throttle, SkipThrottle} from '@nestjs/throttler';
+import { ConfigService } from '@nestjs/config';
+import { v4 as uuidv4 } from 'uuid';
+import { VerifyJWTDto } from './dto/verify-jwt.dto';
+import { Request } from 'express';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const CryptoJS = require('crypto-js');
 
@@ -40,6 +48,7 @@ CryptoJS.lib.WordArray.words;
 @UseInterceptors(SentryInterceptor)
 export class ApiController {
   constructor(
+    private configService: ConfigService,
     private readonly fusionAuthService: FusionauthService,
     private readonly otpService: OtpService,
     private readonly apiService: ApiService,
@@ -266,21 +275,21 @@ export class ApiController {
     );
   }
 
-  @Get('user/:userId')
-  async searchUserbyId(
-    @Param('userId') userId: string,
-    @Headers('authorization') authHeader,
-    @Headers('x-application-id') applicationId,
-  ): Promise<UsersResponse> {
-    const queryString = `(id: ${userId})`; // pass the strict user ID filter
-    return await this.apiService.fetchUsersByString(
-      queryString,
-      undefined,
-      undefined,
-      applicationId,
-      authHeader,
-    );
-  }
+  // @Get('user/:userId')
+  // async searchUserbyId(
+  //   @Param('userId') userId: string,
+  //   @Headers('authorization') authHeader,
+  //   @Headers('x-application-id') applicationId,
+  // ): Promise<UsersResponse> {
+  //   const queryString = `(id: ${userId})`; // pass the strict user ID filter
+  //   return await this.apiService.fetchUsersByString(
+  //     queryString,
+  //     undefined,
+  //     undefined,
+  //     applicationId,
+  //     authHeader,
+  //   );
+  // }
 
   @Post('refresh-token')
   async refreshToken(
@@ -295,33 +304,33 @@ export class ApiController {
     );
   }
 
-  @Patch('/user/:userId/deactivate')
-  async deactivateUserById(
-    @Param('userId') userId: string,
-    @Query('hardDelete') hardDelete = false,
-    @Headers('authorization') authHeader,
-    @Headers('x-application-id') applicationId,
-  ): Promise<UsersResponse> {
-    return await this.apiService.deactivateUserById(
-      userId,
-      hardDelete,
-      applicationId,
-      authHeader,
-    );
-  }
+  // @Patch('/user/:userId/deactivate')
+  // async deactivateUserById(
+  //   @Param('userId') userId: string,
+  //   @Query('hardDelete') hardDelete = false,
+  //   @Headers('authorization') authHeader,
+  //   @Headers('x-application-id') applicationId,
+  // ): Promise<UsersResponse> {
+  //   return await this.apiService.deactivateUserById(
+  //     userId,
+  //     hardDelete,
+  //     applicationId,
+  //     authHeader,
+  //   );
+  // }
 
-  @Patch('/user/:userId/activate')
-  async activateUserById(
-    @Param('userId') userId: string,
-    @Headers('authorization') authHeader,
-    @Headers('x-application-id') applicationId,
-  ): Promise<UsersResponse> {
-    return await this.apiService.activateUserById(
-      userId,
-      applicationId,
-      authHeader,
-    );
-  }
+  // @Patch('/user/:userId/activate')
+  // async activateUserById(
+  //   @Param('userId') userId: string,
+  //   @Headers('authorization') authHeader,
+  //   @Headers('x-application-id') applicationId,
+  // ): Promise<UsersResponse> {
+  //   return await this.apiService.activateUserById(
+  //     userId,
+  //     applicationId,
+  //     authHeader,
+  //   );
+  // }
 
   @Post('/changePassword/sendOTP')
   async changePasswordOTP(
@@ -357,5 +366,78 @@ export class ApiController {
     @Headers('authorization') authHeader,
   ): Promise<any> {
     return await this.apiService.loginWithOtp(user, authHeader);
+  }
+
+  @Post('login-with-unique-id')
+  @UsePipes(new ValidationPipe({ transform: true }))
+  async loginWithUniqueId(
+    @Body() user: LoginWithUniqueIdDto,
+    @Headers('authorization') authHeader,
+    @Headers('ADMIN-API-KEY') adminApiKey
+  ): Promise<any> {
+    if(adminApiKey!=this.configService.get('ADMIN_API_KEY')){
+      const response: SignupResponse = new SignupResponse().init(uuidv4());
+      response.responseCode = ResponseCode.FAILURE;
+      response.params.err = 'UNAUTHORIZED';
+      response.params.errMsg = 'Invalid admin api key';
+      response.params.status = ResponseStatus.failure;
+      return response;
+    }
+    return await this.apiService.loginWithUniqueId(user, authHeader);
+  }
+  
+  @Post('jwt/verify')
+  @UsePipes(new ValidationPipe({transform: true}))
+  async jwtVerify(
+    @Body() body: VerifyJWTDto
+  ): Promise<any> {
+    return await this.apiService.verifyJWT(body.token);
+  }
+
+  @Post('logout')
+  @UsePipes(new ValidationPipe({transform: true}))
+  async logout(
+    @Body() body: VerifyJWTDto
+  ): Promise<any> {
+    return await this.apiService.logout(body.token);
+  }
+
+  @All('*')
+  async defaultRoute(
+    @Req() request: Request,
+    @Headers('authorization') authHeader,
+    @Headers('x-application-id') applicationId,
+    @Body() body: any,
+    @Query() query: any,
+    @Param() params: any,
+  ): Promise<any> {
+    const fusionAuthBaseUrl = this.configService.get('FUSIONAUTH_BASE_URL');
+    const url = new URL(`${fusionAuthBaseUrl}${request.url}`);
+    
+    // Add query params to URL
+    if (query) {
+      Object.keys(query).forEach(key => {
+        url.searchParams.append(key, query[key]);
+      });
+    }
+
+    // Add params to URL
+    if (params) {
+      Object.keys(params).forEach(key => {
+        url.searchParams.append(key, params[key]);
+      });
+    }
+
+    const response = await fetch(url, {
+      method: request.method,
+      body: Object.keys(body).length ? JSON.stringify(body) : undefined,
+      headers: {
+        'Authorization': authHeader,
+        'x-application-id': applicationId,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    return await response.json();
   }
 }
